@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
 from pathlib import Path
 
 # ── Configuração da página ────────────────────────────────────────────────────
@@ -18,20 +16,38 @@ st.set_page_config(
 TEMPLATE_FILE_NAME = "TEMPLATE_WHATS_COBRANCA.xlsx"
 TEMPLATE_PATH = Path(__file__).parent / TEMPLATE_FILE_NAME
 
-# ── Carga de arquivo (suporte a múltiplas abas) ───────────────────────────────
-def load_excel_with_sheets(uploaded_file) -> dict[str, pd.DataFrame] | None:
-    name = uploaded_file.name.lower()
+# ── Carga de arquivo (suporte a múltiplas abas e Parquet) ───────────────────────────────
+@st.cache_data(ttl=3600) # Cache por 1 hora, ou ajuste conforme a necessidade
+def load_data_from_file(uploaded_file_bytes: bytes, file_name: str) -> dict[str, pd.DataFrame] | None:
+    """
+    Carrega dados de um arquivo Excel (xlsx, xls) ou Parquet.
+    Retorna um dicionário onde a chave é o nome da aba/arquivo e o valor é o DataFrame.
+    """
+    name = file_name.lower()
     try:
-        if not (name.endswith(".xlsx") or name.endswith(".xls")):
-            st.error("Formato não suportado. Envie um arquivo .xlsx ou .xls.")
-            return None
-
-        xls = pd.ExcelFile(uploaded_file)
         sheets_data = {}
-        for sheet_name in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str)
+        if name.endswith(".parquet"):
+            st.info("Lendo arquivo Parquet...")
+            df = pd.read_parquet(io.BytesIO(uploaded_file_bytes))
             df.columns = df.columns.str.strip() # Limpa espaços nos nomes das colunas
-            sheets_data[sheet_name] = df
+            # Otimização de tipos de dados (exemplo, ajuste conforme seus dados reais)
+            # df['MATRICULA'] = pd.to_numeric(df['MATRICULA'], errors='coerce').astype('Int64')
+            # df['SITUACAO'] = df['SITUACAO'].astype('category')
+            sheets_data["Dados_Parquet"] = df # Para Parquet, tratamos como uma única "aba"
+            st.success("Arquivo Parquet carregado com sucesso!")
+        elif name.endswith(".xlsx") or name.endswith(".xls"):
+            st.info("Lendo arquivo Excel...")
+            xls = pd.ExcelFile(io.BytesIO(uploaded_file_bytes))
+            for sheet_name in xls.sheet_names:
+                df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str) # Mantido dtype=str para segurança
+                df.columns = df.columns.str.strip() # Limpa espaços nos nomes das colunas
+                # Otimização de tipos de dados (exemplo, ajuste conforme seus dados reais)
+                # df['TELEFONE'] = pd.to_numeric(df['TELEFONE'], errors='coerce').astype(str) # Exemplo: manter como string para telefones
+                sheets_data[sheet_name] = df
+            st.success("Arquivo Excel carregado com sucesso!")
+        else:
+            st.error("Formato não suportado. Envie um arquivo .xlsx, .xls ou .parquet.")
+            return None
         return sheets_data
     except Exception as e:
         st.error(f"Erro ao ler o arquivo: {e}")
@@ -39,6 +55,8 @@ def load_excel_with_sheets(uploaded_file) -> dict[str, pd.DataFrame] | None:
 
 
 # ── Popula o template Excel ───────────────────────────────────────────────────
+# Não cacheamos esta função diretamente porque df_data muda a cada chamada de aba.
+# O cache de load_data_from_file já cobre a parte mais pesada.
 def populate_template(df_data: pd.DataFrame, template_path: Path, column_mapping: dict) -> bytes | None:
     try:
         if not template_path.exists():
@@ -94,19 +112,20 @@ if not TEMPLATE_PATH.exists():
 else:
     st.sidebar.header("1. Carregar Arquivo de Entrada")
     uploaded_file = st.sidebar.file_uploader(
-        "Selecione um arquivo Excel com múltiplas abas", type=["xlsx", "xls"]
+        "Selecione um arquivo (Excel ou Parquet)", type=["xlsx", "xls", "parquet"]
     )
 
     sheets_data = None
     if uploaded_file:
-        sheets_data = load_excel_with_sheets(uploaded_file)
+        # Passa os bytes e o nome do arquivo para a função cacheada
+        sheets_data = load_data_from_file(uploaded_file.getvalue(), uploaded_file.name)
         if sheets_data:
             st.sidebar.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso!")
-            st.sidebar.write(f"Abas encontradas: {', '.join(sheets_data.keys())}")
+            st.sidebar.write(f"Abas/Datasets encontrados: {', '.join(sheets_data.keys())}")
 
-            st.sidebar.header("2. Selecionar Abas para Processar")
+            st.sidebar.header("2. Selecionar Abas/Datasets para Processar")
             selected_sheets = st.sidebar.multiselect(
-                "Escolha as abas que deseja processar:",
+                "Escolha as abas/datasets que deseja processar:",
                 options=list(sheets_data.keys()),
                 default=list(sheets_data.keys()) # Seleciona todas por padrão
             )
@@ -116,7 +135,6 @@ else:
                 st.sidebar.info("Mapeie as colunas do seu arquivo de entrada para as colunas do template.")
 
                 # Pega as colunas da primeira aba selecionada para sugerir no mapeamento
-                # (assumindo que as colunas são consistentes entre as abas)
                 first_selected_df_cols = [''] # Opção vazia para "não mapear"
                 if selected_sheets and sheets_data:
                     first_selected_df_cols.extend(sheets_data[selected_sheets[0]].columns.tolist())
@@ -164,7 +182,7 @@ else:
                         progress_bar = st.progress(0)
 
                         for i, sheet_name in enumerate(selected_sheets):
-                            status_text.info(f"Processando aba: '{sheet_name}'...")
+                            status_text.info(f"Processando aba/dataset: '{sheet_name}'...")
                             df_aba = sheets_data[sheet_name]
 
                             # Popula o template com os dados da aba usando o mapeamento
@@ -175,12 +193,12 @@ else:
 
                             progress_bar.progress((i + 1) / len(selected_sheets))
 
-                        status_text.success("Processamento concluído para todas as abas selecionadas!")
+                        status_text.success("Processamento concluído para todas as abas/datasets selecionados!")
                         st.rerun()
 
     if "processed_files" in st.session_state and st.session_state["processed_files"]:
         st.subheader("Arquivos Gerados")
-        st.markdown("Clique para baixar os arquivos Excel gerados por aba:")
+        st.markdown("Clique para baixar os arquivos Excel gerados por aba/dataset:")
         for sheet_name, file_bytes in st.session_state["processed_files"].items():
             st.download_button(
                 label=f"⬇️ Baixar {sheet_name}.xlsx",
@@ -189,3 +207,11 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"download_{sheet_name}"
             )
+
+    # Opção para limpar o cache
+    st.sidebar.markdown("---")
+    st.sidebar.header("Opções de Cache")
+    if st.sidebar.button("Limpar Cache de Dados Carregados"):
+        st.cache_data.clear()
+        st.sidebar.success("Cache de dados limpo! O aplicativo será recarregado para garantir novos dados.")
+        st.rerun()
