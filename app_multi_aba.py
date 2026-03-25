@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from pathlib import Path # Importar Path para lidar com caminhos de arquivo
 
 # ── Configuração da página ────────────────────────────────────────────────────
 st.set_page_config(
@@ -12,6 +13,11 @@ st.set_page_config(
     page_icon="📂",
     layout="wide",
 )
+
+# ── Caminho do template pré-definido ──────────────────────────────────────────
+# O template TEMPLATE_WHATS_COBRANA_.xlsx deve estar na mesma pasta do app_multi_aba.py
+TEMPLATE_FILE_NAME = "TEMPLATE_WHATS_COBRANA_.xlsx"
+TEMPLATE_PATH = Path(__file__).parent / TEMPLATE_FILE_NAME
 
 # ── Parse de datas robusto ────────────────────────────────────────────────────
 DATE_FORMATS = [
@@ -65,64 +71,20 @@ def load_excel_with_sheets(uploaded_file) -> dict[str, pd.DataFrame] | None:
 
 
 # ── Popula o template Excel ───────────────────────────────────────────────────
-def populate_template(df_data: pd.DataFrame, template_bytes: bytes) -> bytes:
+def populate_template(df_data: pd.DataFrame, template_path: Path) -> bytes:
     try:
-        # Carrega o template
-        template_wb = load_workbook(io.BytesIO(template_bytes))
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template não encontrado em: {template_path}")
+
+        # Carrega o template do caminho especificado
+        template_wb = load_workbook(template_path)
         ws = template_wb.active # Assume que o template tem uma aba ativa para preencher
 
-        # Adiciona o cabeçalho do DataFrame se não existir
-        # (O template tem cabeçalho fixo, então vamos apenas garantir que as colunas existam)
-        template_headers = [cell.value for cell in ws[1]]
-
-        # Mapeia as colunas do DataFrame para as colunas do template
-        # Assumimos que as colunas do template são 'MATRICULA', 'TELEFONE', 'CONCESSIONARIA', 'CIDADE', 'DIRETORIA', 'SITUACAO'
-        # Você precisará ajustar essa lógica se as colunas do seu df_data tiverem nomes diferentes
-        # e precisar de um mapeamento explícito. Por enquanto, faremos um mapeamento direto.
-
-        # Exemplo de mapeamento (ajuste conforme suas colunas de entrada)
-        # Se o seu df_data tiver colunas como 'cliente_id', 'contato', 'local', etc.
-        # você precisará mapear para 'MATRICULA', 'TELEFONE', 'CIDADE', etc.
-
-        # Para este exemplo, vamos assumir que df_data já tem as colunas do template
-        # ou que você vai passar um df_data já transformado.
-        # Se não, você precisará adicionar uma etapa de transformação aqui.
-
-        # Vamos usar um mapeamento simples para o template fornecido:
-        # MATRICULA -> Cliente (ou alguma coluna de ID)
-        # TELEFONE -> Alguma coluna de telefone
-        # CIDADE -> Localidade
-        # SITUACAO -> Tipo de Serviço (ou alguma coluna de status)
-
-        # Para o propósito deste app, vamos assumir que o df_data já está
-        # com as colunas renomeadas para MATRICULA, TELEFONE, etc.
-        # OU que você quer que o app preencha as colunas do template com
-        # as colunas do df_data que tiverem nomes correspondentes.
-
-        # Para o template "TEMPLATE_WHATS_COBRANA_.xlsx":
-        # | MATRICULA | TELEFONE | CONCESSIONARIA | CIDADE | DIRETORIA | SITUACAO |
-
-        # Vamos criar um DataFrame de exemplo para o template
-        # Você precisará adaptar isso para as colunas reais do seu df_data
-
-        # Exemplo: se df_data tem 'CLIENTE', 'TELEFONE_CONTATO', 'LOCALIDADE', 'STATUS_OS'
-        # df_template_ready = df_data.rename(columns={
-        #     'CLIENTE': 'MATRICULA',
-        #     'TELEFONE_CONTATO': 'TELEFONE',
-        #     'LOCALIDADE': 'CIDADE',
-        #     'STATUS_OS': 'SITUACAO'
-        # })
-        # df_template_ready['CONCESSIONARIA'] = 'Sua Concessionaria' # Exemplo de coluna fixa
-        # df_template_ready['DIRETORIA'] = 'Sua Diretoria' # Exemplo de coluna fixa
-
-        # Para simplificar, vamos assumir que o df_data já tem as colunas
-        # que queremos no template, ou que faremos um mapeamento básico.
-
-        # Colunas do template
+        # Colunas do template (definidas com base no TEMPLATE_WHATS_COBRANA_.xlsx)
         template_cols = ['MATRICULA', 'TELEFONE', 'CONCESSIONARIA', 'CIDADE', 'DIRETORIA', 'SITUACAO']
 
         # Cria um DataFrame com as colunas do template, preenchendo com o que tiver no df_data
-        # e NaN para o que não tiver.
+        # e vazio para o que não tiver.
         df_to_write = pd.DataFrame(columns=template_cols)
         for col in template_cols:
             if col in df_data.columns:
@@ -130,7 +92,7 @@ def populate_template(df_data: pd.DataFrame, template_bytes: bytes) -> bytes:
             else:
                 df_to_write[col] = '' # Preenche com vazio se a coluna não existir no df_data
 
-        # Escreve os dados no template a partir da segunda linha
+        # Escreve os dados no template a partir da segunda linha (assumindo cabeçalho na linha 1)
         for r_idx, row_data in enumerate(df_to_write.itertuples(index=False), start=2):
             for c_idx, value in enumerate(row_data, start=1):
                 ws.cell(row=r_idx, column=c_idx, value=value)
@@ -175,8 +137,6 @@ def paginar(df: pd.DataFrame, key: str, page_size: int = 500):
 
 
 # ── Detecção de duplicidades (corrigida e completa) ───────────────────────────
-# Esta função é a mesma que te enviei na última correção, com o grupo_counter global
-# e as validações de cliente/serviço não nulos.
 def detect_duplicates(
     df: pd.DataFrame,
     col_cliente: str,
@@ -225,95 +185,123 @@ def detect_duplicates(
             st.success("Todas as datas foram reconhecidas com sucesso.")
             st.dataframe(amostra, use_container_width=True)
 
-    # ── Remove linhas sem data, sem cliente ou sem serviço ───────────────────
     work = work.dropna(subset=["_data_parsed"]).copy()
-    work = work[
-        work[col_cliente].notna() & (work[col_cliente] != '') &
-        work[col_servico].notna() & (work[col_servico] != '')
-    ].copy()
-
-    if work.empty:
-        st.warning("Após a limpeza de dados inválidos (data, cliente ou serviço), não restaram registros para análise.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
     work = work.reset_index(drop=True)
     work["_row_id"]       = work.index
     work["_cliente_norm"] = work[col_cliente].astype(str).str.strip().str.upper()
     work["_servico_norm"] = work[col_servico].astype(str).str.strip().str.upper()
 
+    # Remover linhas onde cliente ou serviço são nulos após normalização
+    original_len = len(work)
+    work.dropna(subset=["_cliente_norm", "_servico_norm"], inplace=True)
+    if len(work) < original_len:
+        st.warning(f"⚠️ {original_len - len(work)} linhas foram removidas da análise por terem Cliente ou Serviço vazios/nulos.")
+
     # ── Algoritmo de detecção ─────────────────────────────────────────────────
-    registros = []
+    #
+    # Para cada par (cliente, serviço):
+    #   1. Ordena por data crescente
+    #   2. Percorre cada OS como possível âncora (ORIGINAL)
+    #   3. Se já foi marcada DUPLICATA → pula, não vira âncora
+    #   4. Busca todas as OS posteriores não classificadas dentro da janela
+    #   5. Se achou ≥ 1 → cria grupo: âncora = ORIGINAL, demais = DUPLICATA
+    #   6. Avança i += 1 (não pula o cluster inteiro!)
+    #
+
+    classificacoes = [] # Lista para armazenar as classificações de todas as OS
     global_grupo_counter = 0 # Contador GLOBAL para IDs de grupo únicos
 
-    for (_, _), grp in work.groupby(["_cliente_norm", "_servico_norm"], sort=False):
-        if len(grp) < 2:
-            continue
+    # Agrupa por cliente e serviço normalizados, depois ordena por data
+    grouped = work.groupby(["_cliente_norm", "_servico_norm"], sort=False)
 
-        grp     = grp.sort_values("_data_parsed").reset_index(drop=True)
-        datas   = grp["_data_parsed"].tolist()
-        row_ids = grp["_row_id"].tolist()
-        n       = len(grp)
+    for (cliente_norm, servico_norm), grp in grouped:
+        grp = grp.sort_values("_data_parsed").reset_index(drop=True)
 
-        classificacao = {} # row_id -> {"grupo": int, "tipo": str}
+        # Mapeamento local de _row_id para a classificação já feita
+        # Isso evita que uma OS já marcada como DUPLICATA seja reprocessada como ORIGINAL
+        local_classificacao_map = {c["_row_id"]: c for c in classificacoes if c["_cliente_norm"] == cliente_norm and c["_servico_norm"] == servico_norm}
+
         i = 0
+        while i < len(grp):
+            current_os = grp.iloc[i]
+            current_row_id = current_os["_row_id"]
 
-        while i < n:
-            rid_i = row_ids[i]
-
-            # Se esta OS já foi classificada como DUPLICATA, não pode ser âncora de um novo grupo
-            if rid_i in classificacao and classificacao[rid_i]["tipo"] == "DUPLICATA":
+            # Se esta OS já foi classificada como DUPLICATA em um grupo anterior, pule-a
+            if current_row_id in local_classificacao_map and local_classificacao_map[current_row_id]["tipo_registro"] == "DUPLICATA":
                 i += 1
                 continue
 
-            duplicatas_j = []
-            for j in range(i + 1, n):
-                delta = (datas[j] - datas[i]).days
-                if delta <= janela_dias:
-                    rid_j = row_ids[j]
-                    # Só adiciona se ainda não foi classificada
-                    if rid_j not in classificacao:
-                        duplicatas_j.append(j)
-                else:
+            # Inicia um novo grupo de duplicidades
+            global_grupo_counter += 1
+            grupo_id = global_grupo_counter
+
+            # Adiciona a OS atual como ORIGINAL
+            classificacoes.append({
+                "_row_id": current_row_id,
+                "grupo_duplicidade": grupo_id,
+                "tipo_registro": "ORIGINAL",
+                "_cliente_norm": cliente_norm,
+                "_servico_norm": servico_norm,
+            })
+            local_classificacao_map[current_row_id] = classificacoes[-1] # Atualiza o mapa local
+
+            # Busca por duplicatas posteriores dentro da janela
+            found_duplicates_in_group = False
+            for j in range(i + 1, len(grp)):
+                next_os = grp.iloc[j]
+                next_row_id = next_os["_row_id"]
+
+                # Se a próxima OS já foi classificada, ou se já está muito distante no tempo, pare
+                if next_row_id in local_classificacao_map:
+                    # Se já é ORIGINAL de outro grupo, não pode ser duplicata deste
+                    if local_classificacao_map[next_row_id]["tipo_registro"] == "ORIGINAL":
+                        continue
+                    # Se já é DUPLICATA deste grupo, não precisa adicionar de novo
+                    if local_classificacao_map[next_row_id]["grupo_duplicidade"] == grupo_id:
+                        continue
+                    # Se já é DUPLICATA de outro grupo, não pode ser duplicata deste
+                    if local_classificacao_map[next_row_id]["tipo_registro"] == "DUPLICATA":
+                        continue
+
+                time_diff = (next_os["_data_parsed"] - current_os["_data_parsed"]).days
+                if 0 <= time_diff <= janela_dias:
+                    # Marca como DUPLICATA
+                    classificacoes.append({
+                        "_row_id": next_row_id,
+                        "grupo_duplicidade": grupo_id,
+                        "tipo_registro": "DUPLICATA",
+                        "_cliente_norm": cliente_norm,
+                        "_servico_norm": servico_norm,
+                    })
+                    local_classificacao_map[next_row_id] = classificacoes[-1] # Atualiza o mapa local
+                    found_duplicates_in_group = True
+                elif time_diff > janela_dias:
+                    # Se a diferença de tempo excedeu a janela, não há mais duplicatas para esta OS
                     break
 
-            if duplicatas_j:
-                global_grupo_counter += 1 # Incrementa o contador GLOBAL
+            # Se a OS atual foi uma ORIGINAL mas não teve nenhuma duplicata,
+            # e ela não foi marcada como ORIGINAL de outro grupo,
+            # podemos considerá-la como não-duplicada (ou ORIGINAL única).
+            # No entanto, a lógica atual já a classifica como ORIGINAL e a inclui no df_det.
+            # O importante é que ela não seja contada como "duplicata" no resumo.
 
-                # Classifica a OS âncora como ORIGINAL
-                if rid_i not in classificacao:
-                    classificacao[rid_i] = {"grupo": global_grupo_counter, "tipo": "ORIGINAL"}
+            i += 1 # Avança para a próxima OS como potencial âncora
 
-                # Classifica as OSs encontradas como DUPLICATA
-                for j_idx in duplicatas_j:
-                    classificacao[row_ids[j_idx]] = {"grupo": global_grupo_counter, "tipo": "DUPLICATA"}
-
-            i += 1 # Avança para a próxima OS, mesmo que tenha formado um cluster
-
-        # Adiciona os resultados deste grupo (cliente, serviço) à lista global
-        for rid, info in classificacao.items():
-            registros.append({
-                "_row_id": rid,
-                "grupo_duplicidade": info["grupo"],
-                "tipo_registro": info["tipo"],
-            })
-
-    if not registros:
+    # ── Montagem dos DataFrames de saída ──────────────────────────────────────
+    if not classificacoes:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    df_classificacao = pd.DataFrame(registros)
+    df_classificacao = pd.DataFrame(classificacoes)
 
-    # ── Monta o DataFrame de detalhamento ────────────────────────────────────
-    df_merged = pd.merge(
-        work, df_classificacao, on="_row_id", how="left"
-    )
-    # Preenche as OSs que não foram duplicadas
-    df_merged["tipo_registro"] = df_merged["tipo_registro"].fillna("ÚNICA")
-    df_merged["grupo_duplicidade"] = df_merged["grupo_duplicidade"].fillna(0).astype(int)
+    # 1) Detalhamento
+    # Mescla as classificações de volta com o DataFrame original
+    df_det = pd.merge(work, df_classificacao, on="_row_id", how="left")
 
-    # Filtra apenas os registros que fazem parte de um grupo de duplicidade
-    df_merged = df_merged[df_merged["grupo_duplicidade"] > 0].copy()
+    # Preenche OSs não duplicadas (sem grupo) com tipo_registro 'ÚNICA'
+    df_det["tipo_registro"].fillna("ÚNICA", inplace=True)
+    df_det["grupo_duplicidade"].fillna(0, inplace=True) # Grupo 0 para únicas
 
-    # Colunas para o relatório de detalhamento
+    # Seleciona e ordena as colunas para o detalhamento
     output_cols = ["grupo_duplicidade", "tipo_registro"]
     if col_os:
         output_cols.append(col_os)
@@ -321,65 +309,50 @@ def detect_duplicates(
     if cols_extras:
         output_cols += [c for c in cols_extras if c not in output_cols]
 
-    # Garante que as colunas selecionadas existam no df_merged
-    cols_existentes = [c for c in output_cols if c in df_merged.columns]
-    df_det = df_merged[cols_existentes].copy()
+    # Garante que as colunas existam no df_det antes de selecionar
+    final_det_cols = [c for c in output_cols if c in df_det.columns]
+    df_det = df_det[final_det_cols].copy()
+    df_det.rename(columns={"grupo_duplicidade": "grupo"}, inplace=True)
+    df_det.sort_values(["grupo", "_data_parsed"], inplace=True)
 
-    # Adiciona a coluna de data formatada para exibição
-    df_det["DATA_DA_OS"] = df_merged["_data_parsed"].dt.strftime("%d/%m/%Y")
-
-    # Renomeia colunas para o relatório final
-    df_det = df_det.rename(columns={
-        col_cliente: "CLIENTE",
-        col_servico: "DESCRICAO_DO_SERVICO",
-        col_os: "Nº DO PEDIDO" if col_os else "Nº DA OS", # Ajuste o nome da coluna OS
-        col_data: "DATA_ORIGINAL_INPUT" # Mantém a coluna original de data para referência
-    })
-
-    # Reordena as colunas para o detalhamento
-    final_det_cols = ["grupo_duplicidade", "tipo_registro", "Nº DO PEDIDO", "DESCRICAO_DO_SERVICO", "DATA_DA_OS", "CLIENTE"]
-    if cols_extras:
-        final_det_cols.extend([c for c in cols_extras if c not in final_det_cols])
-
-    df_det = df_det[[c for c in final_det_cols if c in df_det.columns]]
-
-
-    # ── Resumo por grupo ──────────────────────────────────────────────────────
+    # 2) Resumo por grupo
     resumo_grupos = []
-    for gid, grp in df_merged.groupby("grupo_duplicidade"):
-        orig = grp[grp["tipo_registro"] == "ORIGINAL"]
-        dups = grp[grp["tipo_registro"] == "DUPLICATA"]
-        if orig.empty: # Deve sempre ter uma original se o grupo > 0
-            continue
+    # Filtra apenas os grupos que têm pelo menos uma DUPLICATA
+    grupos_com_duplicata = df_det[df_det["tipo_registro"] == "DUPLICATA"]["grupo"].unique()
 
-        o         = orig.iloc[0]
-        datas_dup = dups["_data_parsed"]
+    for gid in sorted(grupos_com_duplicata):
+        grupo_df = df_det[df_det["grupo"] == gid].copy()
+        original_os = grupo_df[grupo_df["tipo_registro"] == "ORIGINAL"].iloc[0]
+        dups = grupo_df[grupo_df["tipo_registro"] == "DUPLICATA"]
+
+        datas_dup = dups["_data_parsed"] if not dups.empty else pd.Series(dtype='datetime64[ns]')
 
         row = {
             "grupo":                   int(gid),
-            "cliente":                 o[col_cliente],
-            "tipo_servico":            o[col_servico],
-            "data_os_original":        o["_data_parsed"].strftime("%d/%m/%Y"),
+            "cliente":                 original_os[col_cliente],
+            "tipo_servico":            original_os[col_servico],
+            "data_os_original":        original_os["_data_parsed"].strftime("%d/%m/%Y"),
             "qtd_duplicatas":          len(dups),
             "data_primeira_duplicata": datas_dup.min().strftime("%d/%m/%Y") if not dups.empty else "—",
             "data_ultima_duplicata":   datas_dup.max().strftime("%d/%m/%Y") if not dups.empty else "—",
             "intervalo_dias":          (datas_dup.max() - datas_dup.min()).days if not dups.empty else 0,
         }
         if col_os:
-            row["os_original"]   = str(o[col_os])
+            row["os_original"]   = str(original_os[col_os])
             row["os_duplicadas"] = ", ".join(dups[col_os].astype(str).tolist()) if not dups.empty else "—"
         resumo_grupos.append(row)
 
     df_resumo_grupos = pd.DataFrame(resumo_grupos)
 
-    # ── Resumo por tipo de serviço ────────────────────────────────────────────
+    # 3) Resumo por tipo de serviço
     cont_cli_serv = (
         work.groupby(["_servico_norm", "_cliente_norm"])
         .size()
         .reset_index(name="total_os_cliente")
     )
+
     resumo_servico = []
-    dups_only = df_merged[df_merged["tipo_registro"] == "DUPLICATA"]
+    dups_only = df_det[df_det["tipo_registro"] == "DUPLICATA"]
 
     for servico_norm, grp_serv in dups_only.groupby("_servico_norm"):
         servico_val  = grp_serv[col_servico].iloc[0]
@@ -402,7 +375,7 @@ def detect_duplicates(
             "clientes_3_pedidos":           int((dist == 3).sum()),
             "clientes_4_a_6_pedidos":       int(((dist >= 4) & (dist <= 6)).sum()),
             "clientes_7_a_10_pedidos":      int(((dist >= 7) & (dist <= 10)).sum()),
-            "clientes_mais_10_pedidos":     int((dist > 10).sum()),
+            "clientes_mais_10_pedidos":     int((dist > 10)).sum()),
         })
 
     df_resumo_servico = pd.DataFrame(resumo_servico).sort_values(
@@ -412,162 +385,53 @@ def detect_duplicates(
     return df_det, df_resumo_grupos, df_resumo_servico
 
 
-# ── Exportação Excel ──────────────────────────────────────────────────────────
-def to_excel_bytes(
-    df_det: pd.DataFrame,
-    df_grupos: pd.DataFrame,
-    df_servico: pd.DataFrame,
-    janela_dias: int,
-    sheet_name: str = "Configurações"
-) -> bytes:
-    wb = Workbook()
-
-    header_fill   = PatternFill("solid", fgColor="1F4E79")
-    header_font   = Font(bold=True, color="FFFFFF", size=11)
-    header_align  = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin          = Side(style="thin", color="BFBFBF")
-    border        = Border(left=thin, right=thin, top=thin, bottom=thin)
-    fill_original = PatternFill("solid", fgColor="C6EFCE")
-    palette       = ["FFF2CC", "FDEBD0", "D5F5E3", "D6EAF8", "F9EBEA",
-                     "EAF2FF", "FDF2F8", "E8F8F5", "FDFEFE", "F4ECF7"]
-
-    def auto_col_width(ws, df):
-        for c_idx, col in enumerate(df.columns, 1):
-            max_length = 0
-            column = df.iloc[:, c_idx - 1]
-            for cell in column:
-                try:
-                    if len(str(cell)) > max_length:
-                        max_length = len(str(cell))
-                except:
-                    pass
-            adjusted_width = (max_length + 2)
-            ws.column_dimensions[get_column_letter(c_idx)].width = adjusted_width
-
-    # Detalhamento por OS
-    ws1 = wb.active
-    ws1.title = "Detalhamento por OS"
-    if not df_det.empty:
-        ws1.append(df_det.columns.tolist())
-        for r_idx, row in enumerate(ws1.iter_rows(min_row=1, max_row=1), start=1):
-            for cell in row:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = header_align
-                cell.border = border
-
-        for r_idx, row_data in enumerate(df_det.itertuples(index=False), start=2):
-            ws1.append(row_data)
-            # Aplica formatação condicional para ORIGINAL vs DUPLICATA
-            if row_data[1] == "ORIGINAL": # tipo_registro é a segunda coluna
-                for cell in ws1[r_idx]:
-                    cell.fill = fill_original
-                    cell.border = border
-            elif row_data[0] > 0: # Se for duplicata e tiver grupo
-                fill_dup = PatternFill("solid", fgColor=palette[(row_data[0] - 1) % len(palette)])
-                for cell in ws1[r_idx]:
-                    cell.fill = fill_dup
-                    cell.border = border
-        auto_col_width(ws1, df_det)
-
-    # Resumo por Grupo
-    ws2 = wb.create_sheet("Resumo por Grupo")
-    if not df_grupos.empty:
-        ws2.append(df_grupos.columns.tolist())
-        for r_idx, row in enumerate(ws2.iter_rows(min_row=1, max_row=1), start=1):
-            for cell in row:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = header_align
-                cell.border = border
-        for row_data in df_grupos.itertuples(index=False):
-            ws2.append(row_data)
-        auto_col_width(ws2, df_grupos)
-
-    # Visão por Tipo de Serviço
-    ws3 = wb.create_sheet("Visao por Tipo de Servico")
-    if not df_servico.empty:
-        ws3.append(df_servico.columns.tolist())
-        for r_idx, row in enumerate(ws3.iter_rows(min_row=1, max_row=1), start=1):
-            for cell in row:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = header_align
-                cell.border = border
-        for row_data in df_servico.itertuples(index=False):
-            ws3.append(row_data)
-        auto_col_width(ws3, df_servico)
-
-    # Configurações da Análise
-    ws4 = wb.create_sheet(sheet_name)
-    meta = [
-        ("Data da Análise", datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
-        ("Janela de Duplicidade", f"{janela_dias} dias"),
-        ("Total de OS no período", f"{len(df_det):,}"),
-        ("Total de Grupos Duplicados", f"{df_grupos['grupo'].nunique():,}"),
-        ("Total de OS Duplicadas", f"{len(df_det[df_det['tipo_registro'] == 'DUPLICATA']):,}"),
-    ]
-    for r, (k, v) in enumerate(meta, 1):
-        ws4.cell(r, 1, k).font = Font(bold=True)
-        ws4.cell(r, 2, str(v))
-    ws4.column_dimensions['A'].width = 25
-    ws4.column_dimensions['B'].width = 30
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-# ── Interface Streamlit ───────────────────────────────────────────────────────
-st.title("📂 Processador de Abas Excel para Cobrança")
+# ── Interface do Streamlit ────────────────────────────────────────────────────
+st.title("📂 Processador de Abas Excel com Detecção de Duplicidades")
 st.markdown(
-    "Faça upload de um arquivo Excel com múltiplas abas. "
-    "Para cada aba, um arquivo Excel será gerado usando o template padrão."
+    "Este aplicativo processa um arquivo Excel com múltiplas abas, "
+    "detecta ordens de serviço duplicadas em cada aba e gera arquivos "
+    "Excel individuais preenchidos com as duplicatas, usando um template pré-definido."
 )
 
-# Upload do template
-st.sidebar.header("Template de Saída")
-uploaded_template = st.sidebar.file_uploader(
-    "Faça upload do TEMPLATE_WHATS_COBRANA_.xlsx",
-    type=["xlsx"],
-    key="template_uploader"
-)
+# ── Sidebar para upload e configurações ───────────────────────────────────────
+with st.sidebar:
+    st.header("Upload de Arquivo")
+    uploaded_file = st.file_uploader(
+        "Arraste e solte seu arquivo Excel (.xlsx ou .xls) aqui",
+        type=["xlsx", "xls"],
+        help="O arquivo pode conter múltiplas abas, cada uma será processada individualmente."
+    )
 
-template_content = None
-if uploaded_template:
-    template_content = uploaded_template.read()
-    st.sidebar.success("Template carregado com sucesso!")
-else:
-    st.sidebar.warning("Por favor, carregue o template Excel para continuar.")
-
-st.sidebar.divider()
-
-# Upload do arquivo com múltiplas abas
-st.sidebar.header("Arquivo de Entrada")
-uploaded_file = st.sidebar.file_uploader(
-    "Faça upload do arquivo Excel com as abas para processar",
-    type=["xlsx", "xls"],
-    key="main_file_uploader"
-)
-
-sheets_data = None
-if uploaded_file and template_content:
-    sheets_data = load_excel_with_sheets(uploaded_file)
-    if sheets_data:
-        st.sidebar.success(f"Arquivo '{uploaded_file.name}' carregado com {len(sheets_data)} abas.")
-        st.session_state["sheets_data"] = sheets_data
+    if uploaded_file:
+        st.session_state["uploaded_file_name"] = uploaded_file.name
+        st.session_state["sheets_data"] = load_excel_with_sheets(uploaded_file)
+        if st.session_state["sheets_data"]:
+            st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso!")
+            st.write(f"Abas encontradas: {', '.join(st.session_state['sheets_data'].keys())}")
+        else:
+            st.error("Nenhuma aba válida encontrada no arquivo.")
+            st.session_state["sheets_data"] = None
     else:
-        st.sidebar.error("Não foi possível carregar os dados das abas.")
+        st.session_state["sheets_data"] = None
+        st.session_state["uploaded_file_name"] = None
 
-if "sheets_data" in st.session_state and st.session_state["sheets_data"] and template_content:
-    st.subheader("Abas Encontradas e Configurações de Análise")
+    st.markdown("---")
+    st.info(f"Template de saída: **{TEMPLATE_FILE_NAME}** (deve estar na mesma pasta do app)")
+    if not TEMPLATE_PATH.exists():
+        st.error(f"⚠️ O arquivo de template '{TEMPLATE_FILE_NAME}' não foi encontrado na pasta do aplicativo. Por favor, coloque-o lá para que o app funcione.")
 
-    # Seleção de abas para processar
+
+# ── Corpo principal do app ────────────────────────────────────────────────────
+if not st.session_state.get("sheets_data"):
+    st.warning("Por favor, faça o upload de um arquivo Excel na barra lateral para começar.")
+else:
+    st.subheader("Seleção de Abas para Processar")
+    all_sheet_names = list(st.session_state["sheets_data"].keys())
     selected_sheets = st.multiselect(
-        "Selecione as abas para processar",
-        list(st.session_state["sheets_data"].keys()),
-        default=list(st.session_state["sheets_data"].keys())
+        "Selecione as abas que deseja processar:",
+        options=all_sheet_names,
+        default=all_sheet_names, # Seleciona todas por padrão
+        help="Apenas as abas selecionadas serão analisadas e terão arquivos gerados."
     )
 
     if not selected_sheets:
@@ -633,52 +497,58 @@ if "sheets_data" in st.session_state and st.session_state["sheets_data"] and tem
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            for i, sheet_name in enumerate(selected_sheets):
-                status_text.text(f"Processando aba: {sheet_name} ({i+1}/{len(selected_sheets)})")
-                df_aba = st.session_state["sheets_data"][sheet_name].copy()
+            if not TEMPLATE_PATH.exists():
+                st.error(f"Erro: O arquivo de template '{TEMPLATE_FILE_NAME}' não foi encontrado. Por favor, coloque-o na mesma pasta do aplicativo.")
+            else:
+                for i, sheet_name in enumerate(selected_sheets):
+                    status_text.text(f"Processando aba: {sheet_name} ({i+1}/{len(selected_sheets)})")
+                    df_aba = st.session_state["sheets_data"][sheet_name].copy()
 
-                # 1. Detectar duplicidades para a aba
-                df_det, df_grupos, df_servico = detect_duplicates(
-                    df=df_aba,
-                    col_cliente=col_cliente,
-                    col_servico=col_servico,
-                    col_data=col_data,
-                    janela_dias=int(janela_dias),
-                    col_os=col_os,
-                    cols_extras=cols_extras if cols_extras else None,
-                )
+                    # 1. Detectar duplicidades para a aba
+                    df_det, df_grupos, df_servico = detect_duplicates(
+                        df=df_aba,
+                        col_cliente=col_cliente,
+                        col_servico=col_servico,
+                        col_data=col_data,
+                        janela_dias=int(janela_dias),
+                        col_os=col_os,
+                        cols_extras=cols_extras if cols_extras else None,
+                    )
 
-                # Filtrar apenas as duplicatas para o template de cobrança
-                df_cobranca = df_det[df_det["tipo_registro"] == "DUPLICATA"].copy()
+                    # Filtrar apenas as duplicatas para o template de cobrança
+                    df_cobranca = df_det[df_det["tipo_registro"] == "DUPLICATA"].copy()
 
-                # Mapear e preparar df_cobranca para o template
-                # Este é o ponto CRÍTICO que você precisa ajustar para suas colunas
-                # Exemplo de mapeamento:
-                df_cobranca_template = pd.DataFrame()
-                if not df_cobranca.empty:
-                    df_cobranca_template['MATRICULA'] = df_cobranca['CLIENTE'] # Assumindo que 'CLIENTE' do df_det mapeia para 'MATRICULA'
-                    df_cobranca_template['TELEFONE'] = '' # Preencher com a coluna de telefone real do seu df_aba
-                    df_cobranca_template['CONCESSIONARIA'] = 'SUA_CONCESSIONARIA' # Valor fixo ou de outra coluna
-                    df_cobranca_template['CIDADE'] = df_cobranca['LOCALIDADE'] if 'LOCALIDADE' in df_cobranca.columns else '' # Exemplo
-                    df_cobranca_template['DIRETORIA'] = 'SUA_DIRETORIA' # Valor fixo ou de outra coluna
-                    df_cobranca_template['SITUACAO'] = df_cobranca['DESCRICAO_DO_SERVICO'] # Exemplo
+                    # Mapear e preparar df_cobranca para o template
+                    # Este é o ponto CRÍTICO que você precisa ajustar para suas colunas
+                    # Exemplo de mapeamento:
+                    df_cobranca_template = pd.DataFrame()
+                    if not df_cobranca.empty:
+                        # Adapte estas linhas para mapear as colunas do seu df_cobranca
+                        # para as colunas do template (MATRICULA, TELEFONE, etc.)
+                        # Exemplo:
+                        df_cobranca_template['MATRICULA'] = df_cobranca[col_cliente] # Usa a coluna de cliente selecionada
+                        df_cobranca_template['TELEFONE'] = df_cobranca['TELEFONE_CONTATO'] if 'TELEFONE_CONTATO' in df_cobranca.columns else '' # Exemplo: se tiver coluna de telefone
+                        df_cobranca_template['CONCESSIONARIA'] = 'SUA_CONCESSIONARIA' # Valor fixo ou de outra coluna
+                        df_cobranca_template['CIDADE'] = df_cobranca['CIDADE_OS'] if 'CIDADE_OS' in df_cobranca.columns else '' # Exemplo
+                        df_cobranca_template['DIRETORIA'] = 'SUA_DIRETORIA' # Valor fixo ou de outra coluna
+                        df_cobranca_template['SITUACAO'] = df_cobranca[col_servico] # Usa a coluna de serviço selecionada
 
-                    # Se houver outras colunas no template que não estão no df_cobranca, adicione-as vazias
-                    for t_col in ['MATRICULA', 'TELEFONE', 'CONCESSIONARIA', 'CIDADE', 'DIRETORIA', 'SITUACAO']:
-                        if t_col not in df_cobranca_template.columns:
-                            df_cobranca_template[t_col] = ''
+                        # Garante que todas as colunas do template existam, preenchendo com vazio se faltar
+                        for t_col in ['MATRICULA', 'TELEFONE', 'CONCESSIONARIA', 'CIDADE', 'DIRETORIA', 'SITUACAO']:
+                            if t_col not in df_cobranca_template.columns:
+                                df_cobranca_template[t_col] = ''
 
-                # 2. Popular o template com os dados da aba (apenas duplicatas)
-                if not df_cobranca_template.empty:
-                    output_file_bytes = populate_template(df_cobranca_template, template_content)
-                    if output_file_bytes:
-                        st.session_state["processed_files"][sheet_name] = output_file_bytes
-                else:
-                    st.info(f"Nenhuma duplicata encontrada na aba '{sheet_name}' para gerar arquivo de cobrança.")
+                    # 2. Popular o template com os dados da aba (apenas duplicatas)
+                    if not df_cobranca_template.empty:
+                        output_file_bytes = populate_template(df_cobranca_template, TEMPLATE_PATH)
+                        if output_file_bytes:
+                            st.session_state["processed_files"][sheet_name] = output_file_bytes
+                    else:
+                        st.info(f"Nenhuma duplicata encontrada na aba '{sheet_name}' para gerar arquivo de cobrança.")
 
-                progress_bar.progress((i + 1) / len(selected_sheets))
-            status_text.success("Processamento concluído para todas as abas selecionadas!")
-            st.rerun()
+                    progress_bar.progress((i + 1) / len(selected_sheets))
+                status_text.success("Processamento concluído para todas as abas selecionadas!")
+                st.rerun()
 
     if "processed_files" in st.session_state and st.session_state["processed_files"]:
         st.subheader("Arquivos Gerados")
