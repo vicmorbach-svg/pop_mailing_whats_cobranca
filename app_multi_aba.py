@@ -12,7 +12,6 @@ st.set_page_config(
 )
 
 # ── Caminho do template pré-definido ──────────────────────────────────────────
-# O template TEMPLATE_WHATS_COBRANCA.xlsx deve estar na mesma pasta do app.py
 TEMPLATE_FILE_NAME = "TEMPLATE_WHATS_COBRANCA.xlsx"
 TEMPLATE_PATH = Path(__file__).parent / TEMPLATE_FILE_NAME
 
@@ -27,22 +26,21 @@ def load_data_from_file(uploaded_file_bytes: bytes, file_name: str) -> dict[str,
     try:
         sheets_data = {}
         if name.endswith(".parquet"):
-            st.info("Lendo arquivo Parquet...")
+            st.info("Lendo arquivo Parquet... Isso é ótimo para desempenho com arquivos grandes!")
             df = pd.read_parquet(io.BytesIO(uploaded_file_bytes))
-            df.columns = df.columns.str.strip() # Limpa espaços nos nomes das colunas
-            # Otimização de tipos de dados (exemplo, ajuste conforme seus dados reais)
-            # df['MATRICULA'] = pd.to_numeric(df['MATRICULA'], errors='coerce').astype('Int64')
-            # df['SITUACAO'] = df['SITUACAO'].astype('category')
-            sheets_data["Dados_Parquet"] = df # Para Parquet, tratamos como uma única "aba"
+            df.columns = df.columns.str.strip()
+            # Otimização de tipos de dados: Se souber os tipos, defina-os aqui para economizar memória.
+            # Ex: df['MATRICULA'] = pd.to_numeric(df['MATRICULA'], errors='coerce').astype('Int64')
+            # df['TELEFONE'] = df['TELEFONE'].astype(str) # Garante que telefone é string
+            sheets_data["Dados_Parquet"] = df
             st.success("Arquivo Parquet carregado com sucesso!")
         elif name.endswith(".xlsx") or name.endswith(".xls"):
-            st.info("Lendo arquivo Excel...")
+            st.info("Lendo arquivo Excel... Para arquivos muito grandes, Parquet é mais recomendado.")
             xls = pd.ExcelFile(io.BytesIO(uploaded_file_bytes))
             for sheet_name in xls.sheet_names:
-                df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str) # Mantido dtype=str para segurança
-                df.columns = df.columns.str.strip() # Limpa espaços nos nomes das colunas
-                # Otimização de tipos de dados (exemplo, ajuste conforme seus dados reais)
-                # df['TELEFONE'] = pd.to_numeric(df['TELEFONE'], errors='coerce').astype(str) # Exemplo: manter como string para telefones
+                # Usecols pode ser útil aqui se você não precisar de todas as colunas
+                df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str)
+                df.columns = df.columns.str.strip()
                 sheets_data[sheet_name] = df
             st.success("Arquivo Excel carregado com sucesso!")
         else:
@@ -55,8 +53,6 @@ def load_data_from_file(uploaded_file_bytes: bytes, file_name: str) -> dict[str,
 
 
 # ── Popula o template Excel ───────────────────────────────────────────────────
-# Não cacheamos esta função diretamente porque df_data muda a cada chamada de aba.
-# O cache de load_data_from_file já cobre a parte mais pesada.
 def populate_template(df_data: pd.DataFrame, template_path: Path, column_mapping: dict) -> bytes | None:
     try:
         if not template_path.exists():
@@ -67,25 +63,39 @@ def populate_template(df_data: pd.DataFrame, template_path: Path, column_mapping
 
         template_cols = ['MATRICULA', 'TELEFONE', 'CONCESSIONARIA', 'CIDADE', 'DIRETORIA', 'SITUACAO']
 
-        # Cria um DataFrame temporário para organizar os dados conforme o template
-        df_to_write = pd.DataFrame(columns=template_cols)
-
-        for t_col in template_cols:
-            mapped_value = column_mapping.get(t_col)
-            if mapped_value:
-                # Se o mapeamento é para uma coluna do DataFrame de entrada
-                if mapped_value in df_data.columns:
-                    df_to_write[t_col] = df_data[mapped_value]
-                # Se o mapeamento é um valor fixo (string)
+        # --- INÍCIO DA OTIMIZAÇÃO: Construir lista de dicionários e criar DataFrame de uma vez ---
+        processed_rows_list = []
+        for _, row_data_input in df_data.iterrows():
+            new_row_dict = {}
+            for t_col in template_cols:
+                mapped_value = column_mapping.get(t_col)
+                if mapped_value:
+                    if mapped_value in row_data_input.index: # Verifica se é uma coluna do input
+                        new_row_dict[t_col] = row_data_input[mapped_value]
+                    else: # Valor fixo
+                        new_row_dict[t_col] = mapped_value
                 else:
-                    df_to_write[t_col] = mapped_value
-            else:
-                df_to_write[t_col] = '' # Preenche com vazio se não houver mapeamento
+                    new_row_dict[t_col] = ''
+            processed_rows_list.append(new_row_dict)
+
+        df_to_write = pd.DataFrame(processed_rows_list, columns=template_cols)
+        # --- FIM DA OTIMIZAÇÃO ---
 
         # Escreve os dados no template a partir da segunda linha (assumindo cabeçalho na linha 1)
-        for r_idx, row_data in enumerate(df_to_write.itertuples(index=False), start=2):
-            for c_idx, value in enumerate(row_data, start=1):
-                ws.cell(row=r_idx, column=c_idx, value=value)
+        # Usando ws.append para um desempenho potencialmente melhor em grandes volumes
+        # Primeiro, limpa as linhas existentes se necessário (cuidado para não apagar o cabeçalho)
+        # Se o template já tem cabeçalho na linha 1 e você quer adicionar a partir da linha 2:
+        # Você pode apagar as linhas existentes a partir da linha 2 antes de adicionar
+        # for row in ws.iter_rows(min_row=2):
+        #     for cell in row:
+        #         cell.value = None # Limpa o conteúdo
+        # Ou, se o template é sempre vazio abaixo do cabeçalho, apenas comece a adicionar.
+
+        # Adiciona os dados do DataFrame ao template
+        # O openpyxl.Workbook.append() é geralmente mais rápido para adicionar muitas linhas
+        # do que iterar célula por célula.
+        for r_idx, row_data in enumerate(df_to_write.itertuples(index=False)):
+            ws.append(list(row_data)) # Adiciona cada linha como uma lista
 
         # Salva o workbook em um buffer de bytes
         output_buffer = io.BytesIO()
@@ -98,7 +108,9 @@ def populate_template(df_data: pd.DataFrame, template_path: Path, column_mapping
         return None
     except Exception as e:
         st.error(f"Erro ao popular o template: {e}")
-        return None
+
+
+
 
 
 # ── Interface do Streamlit ────────────────────────────────────────────────────
