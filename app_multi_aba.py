@@ -163,7 +163,7 @@ else:
                         f"Como preencher '{t_col}'?",
                         ('Mapear Coluna', 'Valor Fixo'),
                         key=f"type_map_{t_col}",
-                        index=0 if t_col not in ['CONCESSIONARIA', 'DIRETORIA'] else 1 # Sugere mapear para a maioria, fixo para concessionaria/diretoria
+                        index=0 if t_col not in ['CONCESSIONARIA'] else 1 # Sugere mapear para a maioria, fixo para concessionaria/diretoria
                     )
                     if mapping_type == 'Mapear Coluna':
                         selected_source_col = st.sidebar.selectbox(
@@ -176,7 +176,7 @@ else:
                     else: # Valor Fixo
                         fixed_value = st.sidebar.text_input(
                             f"Valor fixo para '{t_col}':",
-                            value="" if t_col not in ['CONCESSIONARIA', 'DIRETORIA'] else f"Minha {t_col}",
+                            value="" if t_col not in ['CONCESSIONARIA'] else f"Corsan",
                             key=f"fixed_val_{t_col}"
                         )
                         column_mapping[t_col] = fixed_value # Armazena o valor fixo
