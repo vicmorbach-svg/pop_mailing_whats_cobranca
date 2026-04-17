@@ -113,7 +113,7 @@ def populate_template(df_data: pd.DataFrame, template_path: Path, column_mapping
 
 
 # ── Interface do Streamlit ────────────────────────────────────────────────────
-st.title("Populador de Template (CSV/XLSX → Parquet → XLSX Template)")
+st.title("Populador de Template Whats Infobip")
 st.markdown("---")
 
 # Verifica se o template existe
@@ -186,7 +186,7 @@ else:
                     f"Como preencher '{t_col}'?",
                     ('Mapear Coluna', 'Valor Fixo'),
                     key=f"type_map_{t_col}",
-                    index=0 if t_col not in ['CONCESSIONARIA', 'DIRETORIA'] else 1,
+                    index=0 if t_col not in ['CONCESSIONARIA'] else 1,
                 )
                 if mapping_type == 'Mapear Coluna':
                     selected_source_col = st.sidebar.selectbox(
@@ -199,13 +199,13 @@ else:
                 else:
                     fixed_value = st.sidebar.text_input(
                         f"Valor fixo para '{t_col}':",
-                        value="" if t_col not in ['CONCESSIONARIA', 'DIRETORIA'] else f"Minha {t_col}",
+                        value="" if t_col not in ['CONCESSIONARIA'] else f"Corsan",
                         key=f"fixed_val_{t_col}",
                     )
                     column_mapping[t_col] = fixed_value
 
             st.sidebar.markdown("---")
-            st.sidebar.header("4. Gerar Arquivos XLSX (a partir do “Parquet”)")
+            st.sidebar.header("4. Gerar Arquivos XLSX")
             if st.sidebar.button("🚀 Processar e Gerar Arquivos"):
                 if not TEMPLATE_PATH.exists():
                     st.error(
